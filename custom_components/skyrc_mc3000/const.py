@@ -1,8 +1,0 @@
-DOMAIN = "skyrc_mc3000"
-
-CONF_ADDRESS = "address"
-CONF_NAME = "name"
-
-DEFAULT_NAME = "SkyRC MC3000"
-
-MC3000_CHANNELS = 4

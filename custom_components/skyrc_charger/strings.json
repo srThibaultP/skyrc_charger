@@ -1,0 +1,27 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "SkyRC Charger",
+        "description": "Select your charger model.",
+        "data": {
+          "model": "Model"
+        }
+      },
+      "device": {
+        "title": "SkyRC Charger - BLE device",
+        "description": "Select the discovered device or enter its BLE address manually.",
+        "data": {
+          "address": "BLE address",
+          "name": "Name"
+        }
+      }
+    },
+    "error": {
+      "no_devices_found": "No matching BLE devices found. Enter the address manually."
+    },
+    "abort": {
+      "already_configured": "This device is already configured."
+    }
+  }
+}

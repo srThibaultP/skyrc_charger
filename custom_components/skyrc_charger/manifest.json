@@ -1,9 +1,7 @@
 {
-  "domain": "skyrc_mc3000",
-  "name": "SkyRC MC3000",
-  "codeowners": [
-    "@jperquin"
-  ],
+  "domain": "skyrc_charger",
+  "name": "SkyRC Charger (MC3000 / MC5000)",
+  "codeowners": [],
   "config_flow": true,
   "documentation": "https://github.com/jperquin/ha-skyrc-mc3000",
   "integration_type": "hub",
@@ -12,7 +10,7 @@
   "requirements": [
     "skyrc-ble==2.1.0"
   ],
-  "version": "0.9.7",
+  "version": "0.1.0",
   "dependencies": [
     "bluetooth_adapters"
   ]

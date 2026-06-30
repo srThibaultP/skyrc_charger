@@ -1,0 +1,109 @@
+refresh:
+  name: Refresh
+  description: Force an immediate data refresh.
+  fields:
+    entry_id:
+      name: Config entry
+      description: The skyrc_charger config entry to target.
+      required: true
+      selector:
+        config_entry:
+          integration: skyrc_charger
+
+start_slot:
+  name: Start slot
+  description: >
+    Start charging/discharging a slot. On the MC3000 this starts the
+    program already configured on the device. On the MC5000 a fresh
+    config is sent first; you may override chemistry/mode/current/capacity.
+  fields:
+    entry_id:
+      name: Config entry
+      required: true
+      selector:
+        config_entry:
+          integration: skyrc_charger
+    slot:
+      name: Slot
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 8
+          mode: box
+    chemistry:
+      name: Chemistry (MC5000 only)
+      required: false
+      selector:
+        select:
+          options:
+            - liion
+            - liion_hv
+            - lifepo4
+            - nimh
+            - nicd
+            - eneloop
+            - nizn
+            - ram
+            - lto
+            - naion
+    mode:
+      name: Mode (MC5000 only)
+      required: false
+      selector:
+        select:
+          options:
+            - charge
+            - storage
+            - discharge
+            - cycle
+            - refresh
+            - break_in
+    current_ma:
+      name: Current, mA (MC5000 only)
+      required: false
+      selector:
+        number:
+          min: 50
+          max: 5000
+          mode: box
+    capacity_mah:
+      name: Capacity, mAh (MC5000 only)
+      required: false
+      selector:
+        number:
+          min: 100
+          max: 20000
+          mode: box
+
+stop_slot:
+  name: Stop slot
+  description: >
+    Stop one slot. Note: on the MC5000 this currently stops all slots,
+    since per-slot stop is not reliably documented in the BLE protocol.
+  fields:
+    entry_id:
+      name: Config entry
+      required: true
+      selector:
+        config_entry:
+          integration: skyrc_charger
+    slot:
+      name: Slot
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 8
+          mode: box
+
+stop_all:
+  name: Stop all
+  description: Stop all slots.
+  fields:
+    entry_id:
+      name: Config entry
+      required: true
+      selector:
+        config_entry:
+          integration: skyrc_charger
