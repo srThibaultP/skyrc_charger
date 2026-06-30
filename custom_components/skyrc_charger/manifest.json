@@ -1,6 +1,6 @@
 {
   "domain": "skyrc_charger",
-  "name": "SkyRC Charger (MC3000 / MC5000)",
+  "name": "SkyRC Charger",
   "codeowners": [],
   "config_flow": true,
   "documentation": "https://github.com/jperquin/ha-skyrc-mc3000",

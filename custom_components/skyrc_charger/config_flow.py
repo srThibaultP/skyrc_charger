@@ -18,7 +18,7 @@ from .const import (
     MODEL_MC5000,
     MODELS,
 )
-from .coordinator import BLE_NAMES_BY_MODEL
+from .coordinator import BLE_NAME_PATTERNS_BY_MODEL, _name_matches
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,11 +84,11 @@ class SkyrcChargerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             _LOGGER.warning("BLE discovery failed, using manual setup: %r", err)
             return devices
 
-        names = BLE_NAMES_BY_MODEL[model]
+        names = BLE_NAME_PATTERNS_BY_MODEL[model]
         for device in discovered:
             name = device.name or ""
             address = device.address or ""
-            if address and name in names:
+            if address and _name_matches(name, names):
                 devices[address] = f"{name} ({address})"
 
         return devices

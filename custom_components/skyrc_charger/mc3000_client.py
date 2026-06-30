@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import logging
 
-from .const import MC3000_BLE_NAMES
+from .const import MC3000_BLE_NAME_PATTERNS
 from .models import ChannelData, ChargerClient, ChargerState, DeviceData
 
 _LOGGER = logging.getLogger(__name__)
 
-BLE_NAMES = MC3000_BLE_NAMES
+BLE_NAME_PATTERNS = MC3000_BLE_NAME_PATTERNS
 
 
 def _enum_name(value) -> str | None:

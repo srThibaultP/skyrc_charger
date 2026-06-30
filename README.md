@@ -63,16 +63,37 @@ be sent before every start. Sensible per-chemistry defaults are used for
 anything you don't specify (current defaults to 1000 mA, capacity to
 3000 mAh, target/cutoff voltage from the chemistry's standard values).
 
+## Icon / logo
+
+`brand_assets/icon.png`, `icon@2x.png` and `logo.png` are included. Home
+Assistant only displays an integration's icon in the "Add integration"
+list/search and config-flow header if it's published in the official
+[home-assistant/brands](https://github.com/home-assistant/brands)
+repository — there's no purely local way to set it for a custom
+integration. To get the icon to show up: fork that repo, add these three
+files under `custom_integrations/skyrc_charger/`, and open a PR (review is
+usually quick for new custom integrations). Until merged, the integration
+shows the generic puzzle-piece icon; this is a Home Assistant limitation,
+not something this component can work around on its own. Entity icons
+(buttons, sensors, etc.) already work normally without this.
+
 ## Known limitations
 
-- **MC5000 per-slot stop is unreliable.** The reverse-engineered protocol
-  is ambiguous about whether the per-slot bitmask in the stop command
-  (`0x93`) actually stops that slot or instead *starts* it (the doc
-  contradicts itself on this point). To avoid accidentally starting the
-  wrong slot, `stop_slot` and the per-slot stop button currently stop
-  **all** MC5000 slots — this is the one stop behaviour that is solidly
-  validated against real BLE captures. Open an issue / contribute a fix
-  if you can confirm the real per-slot semantics from your own device.
+- **MC5000 chemistry sensor (`Battery Type`) is unreliable.** The
+  protocol doc itself flags the 0x91 status response's chemistry byte as
+  "observed, unconfirmed" — and testing against the doc's own two
+  reference captures shows it actually contradicts itself (a NiMH session
+  reads back as `liion` and a Li-Ion session reads back as `nimh`). This
+  is a charger/protocol-level ambiguity, not a parsing bug on our side;
+  there's currently no reliable way to read back the chemistry the MC5000
+  itself thinks a slot is using. Treat this sensor as informational only,
+  and use `select.*_expected_chemistry` as your source of truth — it's
+  what you set in Home Assistant and what gets sent when you start a
+  slot from here, so it always reflects your intent accurately.
+- **MC5000 per-slot stop is unreliable** — confirmed by the protocol doc
+  itself, which states no per-slot stop command was ever observed, only
+  global stop-all. `stop_slot` and the per-slot stop button therefore
+  always stop all MC5000 slots.
 - **No MC5000 input-voltage / device settings sensors** — the protocol
   doc doesn't document where these live yet.
 - The MC5000 driver is **not officially supported by SkyRC**; it's a

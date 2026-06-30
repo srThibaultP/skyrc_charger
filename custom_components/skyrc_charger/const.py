@@ -22,8 +22,12 @@ CHANNELS_BY_MODEL = {
 }
 
 # BLE advertised names used for auto-discovery.
-MC3000_BLE_NAMES = ("Charger", "SimpleBLEPeripheral", "HitecCharger")
-MC5000_BLE_NAMES = ("MC5000", "SkyRC MC5000", "BT_MC5000")
+# BLE advertised names used for auto-discovery. These chargers use a
+# generic BLE module (TelinkSE) so the advertised name is often NOT the
+# product name — match by substring, not exact name. Patterns are matched
+# case-insensitively against a substring of the advertised local name.
+MC3000_BLE_NAME_PATTERNS = ("charger", "skyrc", "mc3000", "telinkse")
+MC5000_BLE_NAME_PATTERNS = ("mc5000", "skyrc", "#charger", "telinkse", "charger")
 
 CHEMISTRY_OPTIONS = [
     "any",

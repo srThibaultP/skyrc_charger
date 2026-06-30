@@ -14,12 +14,12 @@ import logging
 
 from bleak import BleakClient
 
-from .const import MC5000_BLE_NAMES
+from .const import MC5000_BLE_NAME_PATTERNS
 from .models import ChannelData, ChargerClient, ChargerState, DeviceData
 
 _LOGGER = logging.getLogger(__name__)
 
-BLE_NAMES = MC5000_BLE_NAMES
+BLE_NAME_PATTERNS = MC5000_BLE_NAME_PATTERNS
 
 SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
 CHAR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
@@ -50,6 +50,17 @@ CHEMISTRY_TO_BYTE = {
     "naion": 0x09,
 }
 BYTE_TO_CHEMISTRY = {v: k for k, v in CHEMISTRY_TO_BYTE.items()}
+
+# The byte at offset 19 of the 0x91 status response encodes chemistry
+# using a DIFFERENT, much less certain scheme than the 0x94 config command
+# above (which is fully confirmed). The protocol doc flags this field as
+# "observed, unconfirmed" with only two known values. We deliberately keep
+# this separate so a status-response chemistry byte never gets silently
+# reinterpreted using the (different) config byte values.
+STATUS_CHEM_BYTE_TO_NAME = {
+    0x00: "liion",
+    0x02: "nimh",
+}
 
 # target / cutoff voltage (mV) per chemistry, used to build a sane default
 # 0x94 config when the caller doesn't override them.
@@ -207,26 +218,40 @@ class Mc5000Client(ChargerClient):
 
     @staticmethod
     def _parse_channel(index: int, payload: bytes) -> ChannelData:
-        # payload here is the full notification body (cmd..checksum), we
-        # skip start/length already stripped by the caller.
-        # Expected layout (data bytes, 0-indexed from command byte):
-        # [0]=cmd 0x91 [1]=channel [2]=status [3]=current_hi [4]=current_lo
-        # [5-6]=voltage [9-10]=capacity [13-14]=elapsed [15-16]=resistance
-        # [17]=delta-v [18]=chem
-        if len(payload) < 21:
+        # payload = full notification with start+length stripped, i.e.
+        # payload[0]=command(0x91) payload[1]=channel ... payload[-1]=checksum
+        #
+        # Full-packet offsets per docs/PROTOCOL.md (offset 0 = start byte):
+        #   3=channel 4=status 5=current_raw 6-7=voltage 8-9=unused
+        #   10-11=capacity 12-13=unused 14-15=elapsed 16-17=resistance
+        #   18=delta-V 19=chemistry 20=unused 21=slot_index 22=checksum
+        # Since payload already strips the 2 leading bytes (start+length),
+        # subtract 2 from every offset above to index into `payload`.
+        # Full responses are 21 bytes (this stripped payload); BLE MTU can
+        # truncate notifications to ~18 bytes, dropping chemistry/slot
+        # index/checksum. Don't throw the whole channel away for that.
+        if len(payload) < 16:
             return ChannelData(index=index, status="unavailable")
 
         status_byte = payload[2]
-        current_raw = payload[4]
-        voltage_mv = int.from_bytes(payload[5:7], "big")
-        capacity = int.from_bytes(payload[9:11], "big")
-        elapsed = int.from_bytes(payload[13:15], "big")
-        resistance = int.from_bytes(payload[15:17], "big")
-        chem_byte = payload[18] if len(payload) > 18 else None
+        current_raw = payload[3]
+        voltage_mv = int.from_bytes(payload[4:6], "big")
+        capacity = int.from_bytes(payload[8:10], "big")
+        elapsed = int.from_bytes(payload[12:14], "big")
+        resistance = int.from_bytes(payload[14:16], "big")
+        chem_byte = payload[17] if len(payload) > 17 else None
 
-        if voltage_mv == 0:
-            status = "idle"
-            current_ma = 0
+        if status_byte == 0x00:
+            # Status 0x00 is overloaded; disambiguate per protocol doc.
+            if voltage_mv == 0:
+                status = "empty"
+            elif current_raw > 0:
+                status = "charging"
+            elif elapsed > 0 and capacity > 0:
+                status = "done"
+            else:
+                status = "idle"
+            current_ma = current_raw * 4
         else:
             status = STATUS_BYTE_NAME.get(status_byte, f"unknown_{status_byte:02x}")
             multiplier = 10 if status_byte == 0x07 else 4
@@ -235,7 +260,11 @@ class Mc5000Client(ChargerClient):
         return ChannelData(
             index=index,
             status=status,
-            chemistry=BYTE_TO_CHEMISTRY.get(chem_byte) if chem_byte is not None else None,
+            chemistry=(
+                STATUS_CHEM_BYTE_TO_NAME.get(chem_byte, f"unknown_0x{chem_byte:02x}")
+                if chem_byte is not None
+                else None
+            ),
             mode=None,
             voltage=round(voltage_mv / 1000, 3) if voltage_mv else 0.0,
             current=round(current_ma / 1000, 3),

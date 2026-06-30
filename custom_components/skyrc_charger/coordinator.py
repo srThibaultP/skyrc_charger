@@ -9,8 +9,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import CHANNELS_BY_MODEL, DOMAIN, MODEL_MC3000, MODEL_MC5000
-from .mc3000_client import BLE_NAMES as MC3000_BLE_NAMES, Mc3000Client
-from .mc5000_client import BLE_NAMES as MC5000_BLE_NAMES, Mc5000Client
+from .mc3000_client import BLE_NAME_PATTERNS as MC3000_BLE_NAME_PATTERNS, Mc3000Client
+from .mc5000_client import BLE_NAME_PATTERNS as MC5000_BLE_NAME_PATTERNS, Mc5000Client
 from .models import ChargerClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -23,10 +23,15 @@ CLIENT_BY_MODEL = {
     MODEL_MC5000: Mc5000Client,
 }
 
-BLE_NAMES_BY_MODEL = {
-    MODEL_MC3000: MC3000_BLE_NAMES,
-    MODEL_MC5000: MC5000_BLE_NAMES,
+BLE_NAME_PATTERNS_BY_MODEL = {
+    MODEL_MC3000: MC3000_BLE_NAME_PATTERNS,
+    MODEL_MC5000: MC5000_BLE_NAME_PATTERNS,
 }
+
+
+def _name_matches(name: str, patterns: tuple[str, ...]) -> bool:
+    name_lower = (name or "").lower()
+    return any(pattern in name_lower for pattern in patterns)
 
 
 class SkyrcChargerCoordinator(DataUpdateCoordinator):
@@ -44,7 +49,7 @@ class SkyrcChargerCoordinator(DataUpdateCoordinator):
         self.pause_polling = False
 
     async def _find_device(self):
-        names = BLE_NAMES_BY_MODEL[self.model]
+        patterns = BLE_NAME_PATTERNS_BY_MODEL[self.model]
         _LOGGER.info("SkyRC %s: scanning for BLE device %s", self.model, self.address)
 
         devices = await BleakScanner.discover(timeout=SCAN_TIMEOUT)
@@ -57,7 +62,7 @@ class SkyrcChargerCoordinator(DataUpdateCoordinator):
             if address.upper() == self.address.upper():
                 return device
 
-            if name in names:
+            if _name_matches(name, patterns):
                 fallback = device
 
         if fallback is not None:
