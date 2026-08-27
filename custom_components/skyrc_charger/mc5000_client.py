@@ -13,16 +13,18 @@ import asyncio
 import logging
 
 from bleak import BleakClient
+from bleak.exc import BleakError
+from bleak_retry_connector import establish_connection
 
-from .const import MC5000_BLE_NAME_PATTERNS
+from .const import BLE_CHAR_UUID, BLE_SERVICE_UUID, MC5000_BLE_NAME_PATTERNS
 from .models import ChannelData, ChargerClient, ChargerState, DeviceData
 
 _LOGGER = logging.getLogger(__name__)
 
 BLE_NAME_PATTERNS = MC5000_BLE_NAME_PATTERNS
 
-SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
-CHAR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
+SERVICE_UUID = BLE_SERVICE_UUID
+CHAR_UUID = BLE_CHAR_UUID
 
 START_BYTE = 0x0F
 
@@ -129,59 +131,115 @@ class Mc5000Client(ChargerClient):
         self._client: BleakClient | None = None
         self._notify_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._device_info = DeviceData(name="SkyRC MC5000", model="MC5000")
+        self._connect_lock = asyncio.Lock()
         self._connected = False
         # last known config per channel, used so "start" can be called
         # without forcing the user to re-specify chemistry every time
         self._last_config: dict[int, dict] = {}
 
     @property
+    def name(self) -> str:
+        return getattr(self._device, "name", None) or self._device_info.name
+
+    @property
     def is_connected(self) -> bool:
         return self._connected and self._client is not None and self._client.is_connected
+
+    def set_ble_device(self, ble_device) -> None:
+        """Adopt a freshly discovered BLEDevice for the next connect."""
+        self._device = ble_device
 
     def _notify_handler(self, _characteristic, data: bytearray) -> None:
         self._notify_queue.put_nowait(bytes(data))
 
+    def _disconnected_callback(self, _client: BleakClient) -> None:
+        """Mark the link as down so the next poll reconnects.
+
+        Logged at debug on purpose: the MC5000 drops the link on its own all
+        the time and every drop is recovered on the following poll.
+        """
+        _LOGGER.debug("MC5000: disconnected from %s", getattr(self._device, "address", "?"))
+        self._connected = False
+
     async def connect(self) -> None:
-        self._client = BleakClient(self._device)
-        await self._client.connect()
-        await self._client.start_notify(CHAR_UUID, self._notify_handler)
-        self._connected = True
+        """Open the BLE link and run the charger's mandatory init sequence.
 
-        # Drain the unsolicited greeting (0x06) if/when it arrives.
-        try:
-            await asyncio.wait_for(self._notify_queue.get(), timeout=2.0)
-        except asyncio.TimeoutError:
-            pass
+        Goes through bleak_retry_connector.establish_connection() rather than
+        BleakClient.connect(): it retries the transient BlueZ/proxy errors
+        that a bare connect() surfaces as a hard failure on every single
+        poll, reuses Home Assistant's cached GATT services, and cooperates
+        with the connection slot allocator so we don't fight other
+        integrations for the adapter.
+        """
+        async with self._connect_lock:
+            if self.is_connected:
+                return
 
-        # Required init sequence; without it the device ACKs config (0x94)
-        # but silently ignores start/stop (0x93).
-        await self._send(CMD_VERSION, b"\x00\x00\x00\x00\x00")
-        await self._send(CMD_SETTINGS, b"\x00\x00")
-        await self._send(CMD_SLOT_QUERY, b"\x00")
+            # A fresh queue per connection: notifications left over from a
+            # dropped link would otherwise be read as answers to the first
+            # commands of the new one.
+            self._notify_queue = asyncio.Queue()
 
-        device_info = await self._query_device_info()
-        if device_info:
-            self._device_info = device_info
+            client = await establish_connection(
+                client_class=BleakClient,
+                device=self._device,
+                name=self.name,
+                disconnected_callback=self._disconnected_callback,
+                use_services_cache=True,
+                ble_device_callback=lambda: self._device,
+            )
+
+            self._client = client
+            try:
+                await client.start_notify(CHAR_UUID, self._notify_handler)
+                self._connected = True
+
+                # Drain the unsolicited greeting (0x06) if/when it arrives.
+                try:
+                    await asyncio.wait_for(self._notify_queue.get(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    pass
+
+                # Required init sequence; without it the device ACKs config
+                # (0x94) but silently ignores start/stop (0x93).
+                await self._send(CMD_VERSION, b"\x00\x00\x00\x00\x00")
+                await self._send(CMD_SETTINGS, b"\x00\x00")
+                await self._send(CMD_SLOT_QUERY, b"\x00")
+
+                device_info = await self._query_device_info()
+                if device_info:
+                    self._device_info = device_info
+            except Exception:
+                # Never leave a half-initialised client behind; the charger
+                # only accepts one connection and would refuse the retry.
+                self._connected = False
+                self._client = None
+                try:
+                    await client.disconnect()
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.debug("MC5000: cleanup disconnect failed: %r", err)
+                raise
 
     async def disconnect(self) -> None:
         self._connected = False
-        if self._client is not None:
+        client, self._client = self._client, None
+        if client is not None:
             try:
-                await self._client.disconnect()
+                await client.disconnect()
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug("MC5000 disconnect error: %r", err)
-            self._client = None
 
     async def _send(self, command: int, data: bytes = b"", expect_response: bool = True) -> bytes | None:
-        if self._client is None:
-            raise RuntimeError("MC5000 not connected")
+        client = self._client
+        if client is None:
+            raise BleakError("MC5000 not connected")
 
         packet = _build_packet(command, data)
         # drain stale notifications
         while not self._notify_queue.empty():
             self._notify_queue.get_nowait()
 
-        await self._client.write_gatt_char(CHAR_UUID, packet, response=False)
+        await client.write_gatt_char(CHAR_UUID, packet, response=False)
 
         if not expect_response:
             return None
@@ -189,7 +247,10 @@ class Mc5000Client(ChargerClient):
         try:
             return await asyncio.wait_for(self._notify_queue.get(), timeout=NOTIFY_TIMEOUT)
         except asyncio.TimeoutError:
-            _LOGGER.warning("MC5000: no response to command 0x%02x", command)
+            # Happens on every poll while the charger is asleep; the
+            # coordinator reports the resulting stale data once, not 360
+            # times an hour.
+            _LOGGER.debug("MC5000: no response to command 0x%02x", command)
             return None
 
     async def _query_device_info(self) -> DeviceData | None:
@@ -201,11 +262,11 @@ class Mc5000Client(ChargerClient):
             return None
 
         try:
-            serial = resp[4:11].decode("ascii", errors="ignore")
+            serial = resp[4:11].decode("ascii", errors="ignore").strip()
             fw_major, fw_minor = resp[12], resp[13]
             hw_major, hw_minor = resp[14], resp[15]
             return DeviceData(
-                name="SkyRC MC5000",
+                name=f"SkyRC MC5000 {serial}".strip() if serial else "SkyRC MC5000",
                 address=addr,
                 manufacturer="SkyRC",
                 model="MC5000",
@@ -276,7 +337,7 @@ class Mc5000Client(ChargerClient):
 
     async def async_update(self) -> ChargerState:
         if not self.is_connected:
-            raise RuntimeError("MC5000 not connected")
+            raise BleakError("MC5000 not connected")
 
         channels: list[ChannelData] = []
         for index, bitmask in enumerate(CHANNEL_BITMASK):
@@ -342,6 +403,12 @@ class Mc5000Client(ChargerClient):
         # data[35:40] padding stays zero
         return bytes(data)
 
+    def _merge_config(self, channel: int, kwargs: dict) -> dict:
+        config = dict(self._last_config.get(channel, {}))
+        config.update(kwargs)
+        self._last_config[channel] = config
+        return config
+
     async def start_channel(self, channel: int, **kwargs) -> None:
         """Send a fresh 0x94 config for this channel then start it.
 
@@ -350,13 +417,28 @@ class Mc5000Client(ChargerClient):
         before starting. We do the same here, defaulting any field the
         caller doesn't supply.
         """
-        config = self._last_config.get(channel, {})
-        config.update(kwargs)
-        self._last_config[channel] = config
+        config = self._merge_config(channel, kwargs)
 
         payload = self._build_config_payload(channel, **config)
         await self._send(CMD_CONFIG, payload)
         await self._send(CMD_START_STOP, bytes([CHANNEL_BITMASK[channel]]))
+
+    async def start_all(self, per_channel: dict[int, dict] | None = None, **kwargs) -> None:
+        """Start every slot with a single 0x93.
+
+        0x93 carries the complete set of slots that should be running, so
+        starting them one at a time (the default ChargerClient behaviour)
+        would leave only the last slot going. Push each slot's config
+        first, then arm them all in one command.
+        """
+        per_channel = per_channel or {}
+        mask = 0
+        for channel in range(self.channel_count):
+            config = self._merge_config(channel, {**kwargs, **per_channel.get(channel, {})})
+            await self._send(CMD_CONFIG, self._build_config_payload(channel, **config))
+            mask |= CHANNEL_BITMASK[channel]
+
+        await self._send(CMD_START_STOP, bytes([mask]))
 
     async def stop_channel(self, channel: int) -> None:
         # IMPORTANT CAVEAT: the MC5000 0x93 command appears to treat its

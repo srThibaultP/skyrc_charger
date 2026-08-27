@@ -1,17 +1,21 @@
 {
   "domain": "skyrc_charger",
-  "name": "SkyRC Charger",
-  "codeowners": [],
+  "name": "SkyRC Charger (MC3000 / MC5000)",
+  "codeowners": [
+    "@srThibaultP"
+  ],
   "config_flow": true,
-  "documentation": "https://github.com/jperquin/ha-skyrc-mc3000",
+  "documentation": "https://github.com/srThibaultP/skyrc_charger",
   "integration_type": "hub",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/jperquin/ha-skyrc-mc3000/issues",
+  "issue_tracker": "https://github.com/srThibaultP/skyrc_charger/issues",
   "requirements": [
-    "skyrc-ble==2.1.0"
+    "skyrc-ble @ https://github.com/jperquin/skyrc-ble/archive/refs/tags/v3.0.0.zip",
+    "bleak-retry-connector>=3.4.0"
   ],
-  "version": "0.1.0",
+  "version": "1.2.0",
   "dependencies": [
+    "bluetooth",
     "bluetooth_adapters"
   ]
 }

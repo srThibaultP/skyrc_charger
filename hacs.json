@@ -1,4 +1,5 @@
 {
   "name": "SkyRC Charger (MC3000 / MC5000)",
+  "homeassistant": "2024.8.0",
   "render_readme": true
 }

@@ -6,17 +6,19 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant import config_entries
+from homeassistant.components import bluetooth
 from homeassistant.data_entry_flow import FlowResult
 
 from .const import (
+    BLE_SERVICE_UUID,
     CONF_ADDRESS,
     CONF_MODEL,
     CONF_NAME,
-    DEFAULT_NAME,
     DOMAIN,
     MODEL_MC3000,
     MODEL_MC5000,
     MODELS,
+    MODEL_NAMES,
 )
 from .coordinator import BLE_NAME_PATTERNS_BY_MODEL, _name_matches
 
@@ -49,7 +51,7 @@ class SkyrcChargerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             address = str(user_input[CONF_ADDRESS]).strip()
-            name = str(user_input.get(CONF_NAME) or f"{DEFAULT_NAME} ({MODELS[model]})").strip()
+            name = str(user_input.get(CONF_NAME) or MODEL_NAMES[model]).strip()
 
             await self.async_set_unique_id(f"{model}-{address.upper()}")
             self._abort_if_unique_id_configured()
@@ -70,31 +72,45 @@ class SkyrcChargerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def _async_discover_devices(self, model: str) -> dict[str, str]:
+        """List candidate chargers from Home Assistant's Bluetooth manager.
+
+        Going through HA rather than running our own BleakScanner sweep means
+        devices seen by ESPHome/Shelly Bluetooth proxies show up too, and we
+        don't take the adapter away from other integrations for 15 seconds
+        while the form loads.
+        """
         devices: dict[str, str] = {}
 
         try:
-            from bleak import BleakScanner
+            infos = bluetooth.async_discovered_service_info(self.hass, connectable=True)
         except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("BLE discovery unavailable, using manual setup: %r", err)
+            _LOGGER.warning("HA Bluetooth discovery unavailable, using manual setup: %r", err)
             return devices
 
-        try:
-            discovered = await BleakScanner.discover(timeout=15.0)
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("BLE discovery failed, using manual setup: %r", err)
-            return devices
+        patterns = BLE_NAME_PATTERNS_BY_MODEL[model]
 
-        names = BLE_NAME_PATTERNS_BY_MODEL[model]
-        for device in discovered:
-            name = device.name or ""
-            address = device.address or ""
-            if address and _name_matches(name, names):
-                devices[address] = f"{name} ({address})"
+        for info in infos:
+            address = info.address or ""
+            if not address:
+                continue
+
+            name = info.name or ""
+            service_uuids = [uuid.lower() for uuid in (info.service_uuids or [])]
+
+            if not (_name_matches(name, patterns) or BLE_SERVICE_UUID in service_uuids):
+                continue
+
+            label = f"{name or 'SkyRC charger'} ({address})"
+            rssi = getattr(info, "rssi", None)
+            if rssi is not None:
+                label = f"{label} — RSSI {rssi}"
+
+            devices[address] = label
 
         return devices
 
     def _build_schema(self, devices: dict[str, str], model: str) -> vol.Schema:
-        default_name = f"{DEFAULT_NAME} ({MODELS[model]})"
+        default_name = MODEL_NAMES[model]
         if devices:
             return vol.Schema(
                 {

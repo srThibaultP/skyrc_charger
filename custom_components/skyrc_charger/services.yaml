@@ -2,10 +2,12 @@ refresh:
   name: Refresh
   description: Force an immediate data refresh.
   fields:
-    entry_id:
-      name: Config entry
-      description: The skyrc_charger config entry to target.
-      required: true
+    entry_id: &entry_id
+      name: Charger
+      description: >
+        Which SkyRC charger to target. Optional while a single charger is
+        configured.
+      required: false
       selector:
         config_entry:
           integration: skyrc_charger
@@ -13,26 +15,27 @@ refresh:
 start_slot:
   name: Start slot
   description: >
-    Start charging/discharging a slot. On the MC3000 this starts the
-    program already configured on the device. On the MC5000 a fresh
-    config is sent first; you may override chemistry/mode/current/capacity.
+    Start charging/discharging a slot. On the MC3000 this starts the program
+    already configured on the device, and refuses to start if the slot's
+    "expected chemistry" select disagrees with what the charger reports. On
+    the MC5000 a fresh program is sent first; you may override
+    chemistry/mode/current/capacity.
   fields:
-    entry_id:
-      name: Config entry
-      required: true
-      selector:
-        config_entry:
-          integration: skyrc_charger
-    slot:
+    entry_id: *entry_id
+    slot: &slot
       name: Slot
+      description: Slot number, 1 to 4.
       required: true
       selector:
         number:
           min: 1
-          max: 8
+          max: 4
           mode: box
-    chemistry:
+    chemistry: &chemistry
       name: Chemistry (MC5000 only)
+      description: >
+        Chemistry written into the MC5000 program. Defaults to the slot's
+        "expected chemistry" select when that is not "any".
       required: false
       selector:
         select:
@@ -47,7 +50,7 @@ start_slot:
             - ram
             - lto
             - naion
-    mode:
+    mode: &mode
       name: Mode (MC5000 only)
       required: false
       selector:
@@ -59,7 +62,7 @@ start_slot:
             - cycle
             - refresh
             - break_in
-    current_ma:
+    current_ma: &current_ma
       name: Current, mA (MC5000 only)
       required: false
       selector:
@@ -67,7 +70,7 @@ start_slot:
           min: 50
           max: 5000
           mode: box
-    capacity_mah:
+    capacity_mah: &capacity_mah
       name: Capacity, mAh (MC5000 only)
       required: false
       selector:
@@ -82,28 +85,201 @@ stop_slot:
     Stop one slot. Note: on the MC5000 this currently stops all slots,
     since per-slot stop is not reliably documented in the BLE protocol.
   fields:
-    entry_id:
-      name: Config entry
+    entry_id: *entry_id
+    slot: *slot
+
+start_all:
+  name: Start all slots
+  description: >
+    Start every slot in one command, applying the same expected-chemistry
+    interlock as start_slot to each of them first.
+  fields:
+    entry_id: *entry_id
+    chemistry: *chemistry
+    mode: *mode
+    current_ma: *current_ma
+    capacity_mah: *capacity_mah
+
+stop_all:
+  name: Stop all slots
+  description: Stop all slots.
+  fields:
+    entry_id: *entry_id
+
+fetch_voltage_curve:
+  name: Fetch voltage curve
+  description: >
+    Read back the voltage curve the charger logged for one slot (MC3000
+    only). The samples land on the slot's "Voltage Curve Points" sensor as
+    attributes.
+  fields:
+    entry_id: *entry_id
+    slot: *slot
+
+write_program:
+  name: Write complete program
+  description: >
+    Write a complete program to one MC3000 slot. The MC3000 cannot change
+    only the battery chemistry; all current, voltage and protection
+    parameters are written together. This service does not start the program.
+  fields:
+    entry_id: *entry_id
+    slot: *slot
+    battery_type:
+      name: Battery type
       required: true
       selector:
-        config_entry:
-          integration: skyrc_charger
-    slot:
-      name: Slot
+        select:
+          options:
+            - liion
+            - life
+            - liion_4_35
+            - nimh
+            - nicd
+            - nizn
+            - eneloop
+            - ram
+            - batlto
+    operation:
+      name: Operation
+      required: true
+      selector:
+        select:
+          options:
+            - charge
+            - refresh
+            - storage
+            - breakin
+            - discharge
+            - cycle
+    capacity:
+      name: Capacity, mAh
       required: true
       selector:
         number:
-          min: 1
-          max: 8
+          min: 0
+          max: 65535
           mode: box
-
-stop_all:
-  name: Stop all
-  description: Stop all slots.
-  fields:
-    entry_id:
-      name: Config entry
+    charge_current:
+      name: Charge current, A
       required: true
       selector:
-        config_entry:
-          integration: skyrc_charger
+        number:
+          min: 0
+          max: 65.535
+          step: 0.001
+          mode: box
+    discharge_current:
+      name: Discharge current, A
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 65.535
+          step: 0.001
+          mode: box
+    charge_voltage:
+      name: Target charge voltage, mV
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 65535
+          mode: box
+    discharge_voltage:
+      name: Discharge cut-off voltage, mV
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 65535
+          mode: box
+    charge_end_current:
+      name: Charge termination current, mA
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 65535
+          mode: box
+    discharge_end_current:
+      name: Discharge termination current, mA
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 65535
+          mode: box
+    cycle_time:
+      name: Rest time between cycles, minutes
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    cycle_count:
+      name: Cycle count
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    cycle_type:
+      name: Cycle type
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    delta_v:
+      name: Delta peak, mV
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    trickle_current:
+      name: Trickle current, mA (10 mA steps)
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 250
+          step: 10
+          mode: box
+    maintenance_voltage:
+      name: Maintenance voltage, mV
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 65535
+          mode: box
+    protection_temperature:
+      name: Temperature protection, °C
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    protection_time:
+      name: Time protection, minutes
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 65535
+          mode: box
+    discharge_time:
+      name: Discharge rest time, minutes
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box

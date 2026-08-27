@@ -1,44 +1,42 @@
 from __future__ import annotations
 
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from .entity import SkyrcEntity
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator = data["coordinator"]
-    async_add_entities([SkyrcCompanionAppModeSwitch(coordinator, entry.entry_id)])
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+
+    entities = [SkyrcCompanionAppModeSwitch(coordinator, entry.entry_id)]
+    if coordinator.supports_voltage_curves:
+        entities.append(SkyrcAutoFetchVoltageCurvesSwitch(coordinator, entry.entry_id))
+
+    async_add_entities(entities)
 
 
-class SkyrcCompanionAppModeSwitch(CoordinatorEntity, SwitchEntity):
+class SkyrcBaseSwitch(SkyrcEntity, SwitchEntity):
+    """These switches control the integration, so they stay usable offline."""
+
+    @property
+    def available(self) -> bool:
+        return True
+
+
+class SkyrcCompanionAppModeSwitch(SkyrcBaseSwitch):
     """Releases the BLE connection so the official SkyRC app can connect."""
 
-    _attr_has_entity_name = False
-    _attr_name = "SkyRC Companion App Mode"
-    _attr_icon = "mdi:cellphone-link"
+    _attr_name = "Companion App Mode"
+    _attr_icon = "mdi:bluetooth-off"
 
     def __init__(self, coordinator, entry_id: str) -> None:
-        super().__init__(coordinator)
-        self.entry_id = entry_id
+        super().__init__(coordinator, entry_id)
         self._attr_unique_id = f"{entry_id}_companion_app_mode"
-        self._attr_suggested_object_id = f"{entry_id}_companion_app_mode"
 
     @property
     def is_on(self) -> bool:
         return bool(self.coordinator.pause_polling)
-
-    @property
-    def device_info(self):
-        device = self.coordinator.data.get("device") if self.coordinator.data else None
-        address = getattr(self.coordinator, "address", None) or "skyrc"
-        return {
-            "identifiers": {(DOMAIN, f"{self.entry_id}-{address}")},
-            "name": getattr(device, "name", None) or "SkyRC Charger",
-            "manufacturer": getattr(device, "manufacturer", None) or "SkyRC",
-            "model": getattr(device, "model", None) or self.coordinator.model.upper(),
-        }
 
     async def async_turn_on(self, **kwargs) -> None:
         await self.coordinator.async_enable_companion_app_mode()
@@ -46,4 +44,27 @@ class SkyrcCompanionAppModeSwitch(CoordinatorEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.async_disable_companion_app_mode()
+        self.async_write_ha_state()
+
+
+class SkyrcAutoFetchVoltageCurvesSwitch(SkyrcBaseSwitch):
+    """Keep the voltage curves of the working slots refreshed automatically."""
+
+    _attr_name = "Auto Fetch Voltage Curves"
+    _attr_icon = "mdi:chart-line"
+
+    def __init__(self, coordinator, entry_id: str) -> None:
+        super().__init__(coordinator, entry_id)
+        self._attr_unique_id = f"{entry_id}_auto_fetch_voltage_curves"
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self.coordinator.auto_fetch_voltage_curves)
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.async_set_auto_fetch_voltage_curves(True)
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.async_set_auto_fetch_voltage_curves(False)
         self.async_write_ha_state()
