@@ -59,6 +59,8 @@ def _coordinator(charger: FakeCharger) -> SkyrcChargerCoordinator:
     coordinator._last_good_data = {"state": "last-known-good"}
     coordinator._consecutive_failures = 0
     coordinator._last_failure_repr = None
+    coordinator._last_failure_warning_monotonic = 0.0
+    coordinator.update_interval = coordinator_module.UPDATE_INTERVAL
     coordinator._last_fallback_address = None
     coordinator._last_direct_scan_monotonic = 0.0
     coordinator.voltage_curves = {}
@@ -138,6 +140,29 @@ class QuietRecoveryTest(unittest.IsolatedAsyncioTestCase):
 
             await coordinator._async_update_data()
             self.assertFalse(coordinator.available)
+
+    async def test_an_unreachable_charger_is_polled_less_and_less(self) -> None:
+        charger = FakeCharger()
+        charger.fail = True
+        coordinator = _coordinator(charger)
+        stale = coordinator_module.STALE_AFTER_FAILURES
+
+        with self.assertLogs(LOGGER_NAME, level=logging.DEBUG):
+            for _ in range(stale - 1):
+                await coordinator._async_update_data()
+            self.assertEqual(coordinator.update_interval, coordinator_module.UPDATE_INTERVAL)
+
+            await coordinator._async_update_data()
+            self.assertEqual(coordinator.update_interval, coordinator_module.UPDATE_INTERVAL * 2)
+
+            for _ in range(100):
+                await coordinator._async_update_data()
+            self.assertEqual(coordinator.update_interval, coordinator_module.MAX_BACKOFF_INTERVAL)
+
+            charger.fail = False
+            await coordinator._async_update_data()
+
+        self.assertEqual(coordinator.update_interval, coordinator_module.UPDATE_INTERVAL)
 
 
 class DeviceRefreshTest(unittest.IsolatedAsyncioTestCase):

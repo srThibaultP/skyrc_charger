@@ -39,7 +39,12 @@ DIRECT_SCAN_INTERVAL = 300.0
 STALE_AFTER_FAILURES = 30
 
 # While an outage lasts, repeat the warning about it at most once an hour.
-FAILURE_REMINDER_EVERY = 360
+FAILURE_REMINDER_SECONDS = 3600.0
+
+# Once the data has gone stale, a charger that is off or out of range is not
+# coming back within ten seconds: double the poll interval on every further
+# failure, up to this ceiling, and go back to UPDATE_INTERVAL on success.
+MAX_BACKOFF_INTERVAL = timedelta(minutes=5)
 
 CLIENT_BY_MODEL = {
     MODEL_MC3000: Mc3000Client,
@@ -99,6 +104,7 @@ class SkyrcChargerCoordinator(DataUpdateCoordinator):
         # of a degraded state, not each of the ~360 failures an hour.
         self._consecutive_failures = 0
         self._last_failure_repr: str | None = None
+        self._last_failure_warning_monotonic = 0.0
         self._last_fallback_address: str | None = None
         self._last_direct_scan_monotonic = 0.0
 
@@ -475,22 +481,37 @@ class SkyrcChargerCoordinator(DataUpdateCoordinator):
             )
         self._consecutive_failures = 0
         self._last_failure_repr = None
+        if not self.pause_polling:
+            self.update_interval = UPDATE_INTERVAL
+
+    def _backoff_interval(self) -> timedelta:
+        excess = self._consecutive_failures - STALE_AFTER_FAILURES
+        if excess < 0:
+            return UPDATE_INTERVAL
+        # Cap the exponent before it overflows; the ceiling applies anyway.
+        return min(UPDATE_INTERVAL * 2 ** min(excess + 1, 16), MAX_BACKOFF_INTERVAL)
 
     def _note_failure(self, err: Exception) -> None:
         """Log a poll failure once per outage rather than once per poll."""
         self._consecutive_failures += 1
         failure_repr = repr(err)
 
+        interval = self._backoff_interval()
+        if not self.pause_polling:
+            self.update_interval = interval
+
+        now = time.monotonic()
         first = self._consecutive_failures == 1
-        reminder = self._consecutive_failures % FAILURE_REMINDER_EVERY == 0
+        reminder = now - self._last_failure_warning_monotonic >= FAILURE_REMINDER_SECONDS
 
         if first or reminder:
+            self._last_failure_warning_monotonic = now
             _LOGGER.warning(
                 "SkyRC %s: poll failed %s time(s) in a row; retrying every %ss and serving "
                 "the last known values meanwhile: %s",
                 self.model,
                 self._consecutive_failures,
-                int(UPDATE_INTERVAL.total_seconds()),
+                int(interval.total_seconds()),
                 failure_repr,
             )
         else:
