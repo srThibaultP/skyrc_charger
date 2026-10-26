@@ -26,9 +26,12 @@ class UpdateFailed(Exception):
 class DataUpdateCoordinator:
     """Minimal base class, enough to instantiate the coordinator."""
 
-    def __init__(self, hass, logger, name=None, update_interval=None) -> None:
+    def __init__(
+        self, hass, logger, config_entry=None, name=None, update_interval=None
+    ) -> None:
         self.hass = hass
         self.logger = logger
+        self.config_entry = config_entry
         self.name = name
         self.update_interval = update_interval
         self.data = None
@@ -93,6 +96,8 @@ def _install_stubs() -> None:
     bluetooth = types.ModuleType("homeassistant.components.bluetooth")
     bluetooth.async_ble_device_from_address = lambda *args, **kwargs: None
     bluetooth.async_discovered_service_info = lambda *args, **kwargs: []
+    config_entries = types.ModuleType("homeassistant.config_entries")
+    config_entries.ConfigEntry = object
     core = types.ModuleType("homeassistant.core")
     core.HomeAssistant = object
     helpers = types.ModuleType("homeassistant.helpers")
@@ -101,6 +106,7 @@ def _install_stubs() -> None:
     update_coordinator.UpdateFailed = UpdateFailed
 
     homeassistant.components = components
+    homeassistant.config_entries = config_entries
     homeassistant.core = core
     homeassistant.helpers = helpers
     components.bluetooth = bluetooth
@@ -116,6 +122,7 @@ def _install_stubs() -> None:
         "homeassistant": homeassistant,
         "homeassistant.components": components,
         "homeassistant.components.bluetooth": bluetooth,
+        "homeassistant.config_entries": config_entries,
         "homeassistant.core": core,
         "homeassistant.helpers": helpers,
         "homeassistant.helpers.update_coordinator": update_coordinator,

@@ -13,7 +13,7 @@
     "skyrc-ble @ https://github.com/jperquin/skyrc-ble/archive/refs/tags/v3.0.0.zip",
     "bleak-retry-connector>=3.4.0"
   ],
-  "version": "1.2.0",
+  "version": "1.2.1",
   "dependencies": [
     "bluetooth",
     "bluetooth_adapters"

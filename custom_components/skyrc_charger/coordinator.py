@@ -5,10 +5,18 @@ import logging
 import time
 
 from homeassistant.components import bluetooth
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import CHANNELS_BY_MODEL, DOMAIN, MODEL_NAMES, MODEL_MC3000, MODEL_MC5000
+from .const import (
+    CHANNELS_BY_MODEL,
+    DOMAIN,
+    MODEL_NAMES,
+    MODEL_MC3000,
+    MODEL_MC5000,
+    OPTION_COMPANION_APP_MODE,
+)
 from .mc3000_client import BLE_NAME_PATTERNS as MC3000_BLE_NAME_PATTERNS, Mc3000Client
 from .mc5000_client import BLE_NAME_PATTERNS as MC5000_BLE_NAME_PATTERNS, Mc5000Client
 from .models import ChargerClient
@@ -31,7 +39,12 @@ DIRECT_SCAN_INTERVAL = 300.0
 STALE_AFTER_FAILURES = 30
 
 # While an outage lasts, repeat the warning about it at most once an hour.
-FAILURE_REMINDER_EVERY = 360
+FAILURE_REMINDER_SECONDS = 3600.0
+
+# Once the data has gone stale, a charger that is off or out of range is not
+# coming back within ten seconds: double the poll interval on every further
+# failure, up to this ceiling, and go back to UPDATE_INTERVAL on success.
+MAX_BACKOFF_INTERVAL = timedelta(minutes=5)
 
 CLIENT_BY_MODEL = {
     MODEL_MC3000: Mc3000Client,
@@ -58,8 +71,18 @@ class SkyrcChargerCoordinator(DataUpdateCoordinator):
         address: str,
         model: str,
         device_name: str | None = None,
+        config_entry: ConfigEntry | None = None,
     ) -> None:
-        super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=UPDATE_INTERVAL)
+        # Passing the entry explicitly is what makes Home Assistant honour
+        # the entry's "polling disabled" system option and shut the
+        # coordinator down when the entry is unloaded.
+        super().__init__(
+            hass,
+            _LOGGER,
+            config_entry=config_entry,
+            name=DOMAIN,
+            update_interval=UPDATE_INTERVAL,
+        )
         self.address = address
         self.model = model
         # Taken from the config entry title so it is stable from the very
@@ -73,12 +96,15 @@ class SkyrcChargerCoordinator(DataUpdateCoordinator):
         self._last_device = None
         self._last_good_data = None
         self.pause_polling = False
+        if config_entry is not None and config_entry.options.get(OPTION_COMPANION_APP_MODE):
+            self._set_paused(True)
 
         # Noise control: these chargers drop their link constantly and every
         # drop is recovered on the next poll. Log the transition into and out
         # of a degraded state, not each of the ~360 failures an hour.
         self._consecutive_failures = 0
         self._last_failure_repr: str | None = None
+        self._last_failure_warning_monotonic = 0.0
         self._last_fallback_address: str | None = None
         self._last_direct_scan_monotonic = 0.0
 
@@ -222,9 +248,38 @@ class SkyrcChargerCoordinator(DataUpdateCoordinator):
     # Companion app mode
     # ------------------------------------------------------------------
 
+    @property
+    def polling_disabled(self) -> bool:
+        """Whether nothing should talk to the charger on a schedule."""
+        entry = self.config_entry
+        return self.pause_polling or bool(entry is not None and entry.pref_disable_polling)
+
+    def _set_paused(self, paused: bool) -> None:
+        """Pause or resume the schedule, not just the BLE work.
+
+        With no update interval the base class stops rescheduling refreshes,
+        so a paused charger costs nothing instead of a no-op poll every ten
+        seconds.
+        """
+        self.pause_polling = paused
+        self.update_interval = None if paused else UPDATE_INTERVAL
+
+    def _persist_companion_app_mode(self) -> None:
+        """Remember the switch, or a restart would silently resume polling."""
+        entry = self.config_entry
+        if entry is None:
+            return
+        if bool(entry.options.get(OPTION_COMPANION_APP_MODE)) == self.pause_polling:
+            return
+        self.hass.config_entries.async_update_entry(
+            entry,
+            options={**entry.options, OPTION_COMPANION_APP_MODE: self.pause_polling},
+        )
+
     async def async_enable_companion_app_mode(self) -> None:
         _LOGGER.info("SkyRC %s: enabling companion app mode", self.model)
-        self.pause_polling = True
+        self._set_paused(True)
+        self._persist_companion_app_mode()
 
         if self.charger is not None:
             try:
@@ -239,7 +294,8 @@ class SkyrcChargerCoordinator(DataUpdateCoordinator):
 
     async def async_disable_companion_app_mode(self) -> None:
         _LOGGER.info("SkyRC %s: disabling companion app mode", self.model)
-        self.pause_polling = False
+        self._set_paused(False)
+        self._persist_companion_app_mode()
         self.charger = None
         self._last_device = None
         await self.async_request_refresh()
@@ -425,22 +481,37 @@ class SkyrcChargerCoordinator(DataUpdateCoordinator):
             )
         self._consecutive_failures = 0
         self._last_failure_repr = None
+        if not self.pause_polling:
+            self.update_interval = UPDATE_INTERVAL
+
+    def _backoff_interval(self) -> timedelta:
+        excess = self._consecutive_failures - STALE_AFTER_FAILURES
+        if excess < 0:
+            return UPDATE_INTERVAL
+        # Cap the exponent before it overflows; the ceiling applies anyway.
+        return min(UPDATE_INTERVAL * 2 ** min(excess + 1, 16), MAX_BACKOFF_INTERVAL)
 
     def _note_failure(self, err: Exception) -> None:
         """Log a poll failure once per outage rather than once per poll."""
         self._consecutive_failures += 1
         failure_repr = repr(err)
 
+        interval = self._backoff_interval()
+        if not self.pause_polling:
+            self.update_interval = interval
+
+        now = time.monotonic()
         first = self._consecutive_failures == 1
-        reminder = self._consecutive_failures % FAILURE_REMINDER_EVERY == 0
+        reminder = now - self._last_failure_warning_monotonic >= FAILURE_REMINDER_SECONDS
 
         if first or reminder:
+            self._last_failure_warning_monotonic = now
             _LOGGER.warning(
                 "SkyRC %s: poll failed %s time(s) in a row; retrying every %ss and serving "
                 "the last known values meanwhile: %s",
                 self.model,
                 self._consecutive_failures,
-                int(UPDATE_INTERVAL.total_seconds()),
+                int(interval.total_seconds()),
                 failure_repr,
             )
         else:

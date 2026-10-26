@@ -401,14 +401,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     address = entry.data[CONF_ADDRESS]
     model = entry.data.get(CONF_MODEL, MODEL_MC3000)
 
-    coordinator = SkyrcChargerCoordinator(hass, address, model, device_name=entry.title)
+    coordinator = SkyrcChargerCoordinator(
+        hass, address, model, device_name=entry.title, config_entry=entry
+    )
     domain_data[entry.entry_id] = {"coordinator": coordinator, "model": model}
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     _async_register_services(hass)
 
-    hass.async_create_task(coordinator.async_refresh())
+    # A paused or polling-disabled charger isn't contacted until someone asks
+    # for it (refresh button/service, or turning companion app mode off).
+    if not coordinator.polling_disabled:
+        entry.async_create_background_task(
+            hass, coordinator.async_refresh(), f"{DOMAIN} first refresh"
+        )
 
     return True
 

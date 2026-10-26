@@ -62,6 +62,10 @@ covering all of it, including charts of the logged voltage curves.
 Both chargers only allow one BLE client at a time. Turn on
 `switch.*_companion_app_mode` to have Home Assistant disconnect and pause
 polling so the official SkyRC app can connect; turn it back off when done.
+The switch is remembered across restarts, so it also works to park a charger
+you aren't using. The entry's "Enable polling for changes" system option is
+honoured as well: with it off, the charger is only contacted when you press
+refresh or call a service.
 
 ## Services
 
