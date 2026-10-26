@@ -6,6 +6,9 @@ CONF_ADDRESS = "address"
 CONF_NAME = "name"
 CONF_MODEL = "model"
 
+# Stored in the entry options so companion app mode survives a restart.
+OPTION_COMPANION_APP_MODE = "companion_app_mode"
+
 DEFAULT_NAME = "SkyRC Charger"
 
 MODEL_MC3000 = "mc3000"

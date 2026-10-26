@@ -176,5 +176,62 @@ class DeviceRefreshTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(charger.devices, [])
 
 
+
+class FakeEntry:
+    def __init__(self, options=None, pref_disable_polling=False) -> None:
+        self.options = dict(options or {})
+        self.pref_disable_polling = pref_disable_polling
+
+
+class FakeConfigEntries:
+    def async_update_entry(self, entry, options) -> None:
+        entry.options = options
+
+
+class FakeHass:
+    def __init__(self) -> None:
+        self.config_entries = FakeConfigEntries()
+
+
+def _real_coordinator(entry) -> SkyrcChargerCoordinator:
+    return SkyrcChargerCoordinator(
+        FakeHass(), "AA:BB:CC:DD:EE:FF", "mc5000", config_entry=entry
+    )
+
+
+class PausedPollingTest(unittest.IsolatedAsyncioTestCase):
+    """A charger the user switched off must stay off, restart included."""
+
+    def test_companion_app_mode_survives_a_restart(self) -> None:
+        coordinator = _real_coordinator(FakeEntry({"companion_app_mode": True}))
+
+        self.assertTrue(coordinator.pause_polling)
+        self.assertIsNone(coordinator.update_interval)
+        self.assertTrue(coordinator.polling_disabled)
+
+    def test_polls_by_default(self) -> None:
+        coordinator = _real_coordinator(FakeEntry())
+
+        self.assertFalse(coordinator.polling_disabled)
+        self.assertEqual(coordinator.update_interval, coordinator_module.UPDATE_INTERVAL)
+
+    def test_polling_disabled_system_option_is_honoured(self) -> None:
+        coordinator = _real_coordinator(FakeEntry(pref_disable_polling=True))
+
+        self.assertTrue(coordinator.polling_disabled)
+
+    async def test_switching_companion_app_mode_is_persisted(self) -> None:
+        entry = FakeEntry()
+        coordinator = _real_coordinator(entry)
+
+        await coordinator.async_enable_companion_app_mode()
+        self.assertEqual(entry.options, {"companion_app_mode": True})
+        self.assertIsNone(coordinator.update_interval)
+
+        await coordinator.async_disable_companion_app_mode()
+        self.assertEqual(entry.options, {"companion_app_mode": False})
+        self.assertEqual(coordinator.update_interval, coordinator_module.UPDATE_INTERVAL)
+
+
 if __name__ == "__main__":
     unittest.main()
